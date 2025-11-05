@@ -3,7 +3,7 @@ pub(crate) mod trap;
 
 use core::arch::asm;
 
-use aarch64_cpu::registers::{DAIF, TPIDR_EL0, TTBR0_EL1, TTBR1_EL1, VBAR_EL1};
+use aarch64_cpu::registers::{DAIF, TPIDR_EL0, TTBR0_EL1, TTBR1_EL1, VBAR_EL1, CurrentEL};
 use memory_addr::{PhysAddr, VirtAddr};
 use tock_registers::interfaces::{Readable, Writeable};
 
@@ -53,8 +53,20 @@ pub fn read_page_table_root() -> PhysAddr {
 
 /// Reads the `TTBR0_EL1` register.
 pub fn read_page_table_root0() -> PhysAddr {
-    let root = TTBR0_EL1.get();
-    pa!(root as usize)
+    #[cfg(feature = "el2")]
+    {
+        // EL2 只有一个页表基址寄存器 TTBR0_EL2
+        let root: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, ttbr0_el2", out(reg) root);
+        }
+        pa!(root as usize)
+    }
+    #[cfg(not(feature = "el2"))]
+    {
+        let root = TTBR0_EL1.get();
+        pa!(root as usize)
+    }
 }
 
 /// Writes the register to update the current page table root.
@@ -78,8 +90,20 @@ pub unsafe fn write_page_table_root(root_paddr: PhysAddr) {
 ///
 /// This function is unsafe as it changes the virtual memory address space.
 pub unsafe fn write_page_table_root0(root_paddr: PhysAddr) {
-    TTBR0_EL1.set(root_paddr.as_usize() as _);
-    flush_tlb(None);
+    #[cfg(feature = "el2")]
+    {
+        // EL2: 使用 TTBR0_EL2,但通常不需要禁用低地址访问
+        // 因为 EL2 的地址空间就是高地址
+        if root_paddr.as_usize() != 0 {
+            core::arch::asm!("msr ttbr0_el2, {}", in(reg) root_paddr.as_usize());
+            flush_tlb(None);
+        }
+    }
+    #[cfg(not(feature = "el2"))]
+    {
+        TTBR0_EL1.set(root_paddr.as_usize() as _);
+        flush_tlb(None);
+    }
 }
 
 /// Flushes the TLB.
@@ -104,10 +128,35 @@ pub fn flush_icache_all() {
     unsafe { asm!("ic iallu; dsb sy; isb") };
 }
 
-/// Sets the base address of the exception vector (writes `VBAR_EL1`).
+/// Sets the base address of the exception vector (writes `VBAR_EL1` or `VBAR_EL2`).
 #[inline]
-pub fn set_exception_vector_base(vbar_el1: usize) {
-    VBAR_EL1.set(vbar_el1 as _);
+pub fn set_exception_vector_base(vbar: usize) {
+    let current_el = CurrentEL.read(CurrentEL::EL);
+    // 调试输出
+    unsafe {
+        let uart_base = 0x0900_0000 as *mut u8;
+        let msg = b"Setting exception vector\r\n";
+        for &byte in msg {
+            core::ptr::write_volatile(uart_base, byte);
+        }
+    }
+    if current_el == 2 {
+        // EL2: 使用 VBAR_EL2
+        unsafe {
+            core::arch::asm!("msr vbar_el2, {}", in(reg) vbar);
+            // 验证设置
+            let check: usize;
+            core::arch::asm!("mrs {}, vbar_el2", out(reg) check);
+            let uart_base = 0x0900_0000 as *mut u8;
+            let msg = b"VBAR_EL2 set to: ";
+            for &byte in msg {
+                core::ptr::write_volatile(uart_base, byte);
+            }
+        }
+    } else {
+        // EL1: 使用 VBAR_EL1
+        VBAR_EL1.set(vbar as _);
+    }
 }
 
 /// Flushes the data cache line (64 bytes) at the given virtual address

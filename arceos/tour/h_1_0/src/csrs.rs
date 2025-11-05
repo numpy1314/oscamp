@@ -1,10 +1,7 @@
 #![allow(dead_code)]
-
 use defs::*;
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::RegisterLongName;
-
-/// Define each registers of hypervisor using.
 pub struct CSR {
     pub sie: ReadWriteCsr<sie::Register, CSR_SIE>,
     pub hstatus: ReadWriteCsr<hstatus::Register, CSR_HSTATUS>,
@@ -13,7 +10,6 @@ pub struct CSR {
     pub hcounteren: ReadWriteCsr<hcounteren::Register, CSR_HCOUNTEREN>,
     pub hvip: ReadWriteCsr<hvip::Register, CSR_HVIP>,
 }
-
 #[allow(clippy::identity_op, clippy::erasing_op)]
 pub const CSR: &CSR = &CSR {
     sie: ReadWriteCsr::new(),
@@ -23,31 +19,17 @@ pub const CSR: &CSR = &CSR {
     hcounteren: ReadWriteCsr::new(),
     hvip: ReadWriteCsr::new(),
 };
-
-/// Trait defining the possible operations on a RISC-V CSR.
 pub trait RiscvCsrTrait {
     type R: RegisterLongName;
-    /// Reads the value of the CSR.
     fn get_value(&self) -> usize;
-
-    /// Writes the value of the CSR.
     fn write_value(&self, value: usize);
-
-    /// Atomicllt swaps the value of CSRs.
     fn atomic_replace(&self, value: usize) -> usize;
-
-    /// Atomically read a CSR and set bits specified in a bitmask
     fn read_and_set_bits(&self, bitmasks: usize) -> usize;
-
-    /// Atomically read a CSR and set bits specified in a bitmask
     fn read_and_clear_bits(&self, bitmasks: usize) -> usize;
 }
-
-/// Read/Write register.
 pub struct ReadWriteCsr<R: RegisterLongName, const V: u16> {
     associated_register: core::marker::PhantomData<R>,
 }
-
 impl<R: RegisterLongName, const V: u16> ReadWriteCsr<R, V> {
     pub const fn new() -> Self {
         Self {
@@ -55,10 +37,8 @@ impl<R: RegisterLongName, const V: u16> ReadWriteCsr<R, V> {
         }
     }
 }
-
 impl<R: RegisterLongName, const V: u16> RiscvCsrTrait for ReadWriteCsr<R, V> {
     type R = R;
-
     fn get_value(&self) -> usize {
         let r: usize;
         unsafe {
@@ -66,13 +46,11 @@ impl<R: RegisterLongName, const V: u16> RiscvCsrTrait for ReadWriteCsr<R, V> {
         }
         r
     }
-
     fn write_value(&self, value: usize) {
         unsafe {
             core::arch::asm!("csrw {csr}, {rs}", csr = const V, rs = in(reg) value);
         }
     }
-
     fn atomic_replace(&self, value: usize) -> usize {
         let r: usize;
         unsafe {
@@ -80,7 +58,6 @@ impl<R: RegisterLongName, const V: u16> RiscvCsrTrait for ReadWriteCsr<R, V> {
         }
         r
     }
-
     fn read_and_set_bits(&self, bitmask: usize) -> usize {
         let r: usize;
         unsafe {
@@ -88,7 +65,6 @@ impl<R: RegisterLongName, const V: u16> RiscvCsrTrait for ReadWriteCsr<R, V> {
         }
         r
     }
-
     fn read_and_clear_bits(&self, bitmask: usize) -> usize {
         let r: usize;
         unsafe {
@@ -97,27 +73,20 @@ impl<R: RegisterLongName, const V: u16> RiscvCsrTrait for ReadWriteCsr<R, V> {
         r
     }
 }
-
-// The Readable and Writeable traits aren't object-safe so unfortunately we can't implement them
-// for RiscvCsrInterface.
 impl<R: RegisterLongName, const V: u16> Readable for ReadWriteCsr<R, V> {
     type T = usize;
     type R = R;
-
     fn get(&self) -> usize {
         self.get_value()
     }
 }
-
 impl<R: RegisterLongName, const V: u16> Writeable for ReadWriteCsr<R, V> {
     type T = usize;
     type R = R;
-
     fn set(&self, val_to_set: usize) {
         self.write_value(val_to_set);
     }
 }
-
 pub mod defs {
     use tock_registers::register_bitfields;
     pub const CSR_SSTATUS: u16 = 0x100;
@@ -169,8 +138,6 @@ pub mod defs {
     pub const CSR_HGATP: u16 = 0x680;
     pub const CSR_HCONTEXT: u16 = 0x6a8;
     pub const CSR_HGEIP: u16 = 0xe12;
-
-    // Hypervisor exception delegation register.
     register_bitfields![usize,
     pub hedeleg [
         instr_misaligned OFFSET(0) NUMBITS(1) [],
@@ -187,8 +154,6 @@ pub mod defs {
         store_page_fault OFFSET(15) NUMBITS(1) [],
     ]
     ];
-
-    // Supervisor interrupt enable register.
     register_bitfields![usize,
     pub sie [
         ssoft OFFSET(1) NUMBITS(1) [],
@@ -196,43 +161,29 @@ pub mod defs {
         sext OFFSET(9) NUMBITS(1) [],
     ]
     ];
-
-    // Hypervisor status register.
     register_bitfields![usize,
     pub hstatus [
-        // VS mode endianness control.
         vsbe OFFSET(6) NUMBITS(1) [],
-        // A guest virtual address was written to stval as a result of the trap.
         gva OFFSET(6) NUMBITS(1) [],
-        // Virtualization mode at time of trap.
         spv OFFSET(7) NUMBITS(1) [
             Host = 0,
             Guest = 1,
         ],
-        // Privilege level the virtual hart was executing before entering HS-mode.
         spvp OFFSET(8) NUMBITS(1) [
             User = 0,
             Supervisor = 1,
         ],
-        // Allow hypervisor instructions in U-mode.
         hu OFFSET(9) NUMBITS(1) [],
-        // Selects the guest external interrupt source for VS external interrupts.
         vgein OFFSET(12) NUMBITS(6) [],
-        // Trap on SFENCE, SINVAL, or changes to vsatp.
         vtvm OFFSET(20) NUMBITS(1) [],
-        // Trap on WFI timeout.
         vtw OFFSET(21) NUMBITS(1) [],
-        // Trap SRET instruction.
         vtsr OFFSET(22) NUMBITS(1) [],
-        // Native base integer ISA width for VS-mode.
         vsxl OFFSET(32) NUMBITS(2) [
             Xlen32 = 1,
             Xlen64 = 2,
         ],
     ]
     ];
-
-    // Hypervisor interrupt delegation register.
     register_bitfields![usize,
     pub hideleg [
         vssoft OFFSET(2) NUMBITS(1) [],
@@ -240,8 +191,6 @@ pub mod defs {
         vsext OFFSET(10) NUMBITS(1) [],
     ]
     ];
-
-    // Hypervisor interrupt enable register.
     register_bitfields![usize,
     pub hie [
         vssoft OFFSET(2) NUMBITS(1) [],
@@ -250,8 +199,6 @@ pub mod defs {
         sgext OFFSET(12) NUMBITS(1) [],
     ]
     ];
-
-    // VS-mode counter availability control.
     register_bitfields![usize,
     pub hcounteren [
         cycle OFFSET(0) NUMBITS(1) [],
@@ -260,8 +207,6 @@ pub mod defs {
         hpm OFFSET(3) NUMBITS(29) [],
     ]
     ];
-
-    // Hypervisor virtual interrupt pending.
     register_bitfields![usize,
     pub hvip [
         vssoft OFFSET(2) NUMBITS(1) [],
@@ -270,7 +215,6 @@ pub mod defs {
     ]
     ];
 }
-
 pub mod traps {
     pub mod interrupt {
         pub const USER_SOFT: usize = 1 << 0;
@@ -287,7 +231,6 @@ pub mod traps {
         pub const MACHINEL_EXTERNAL: usize = 1 << 11;
         pub const SUPERVISOR_GUEST_EXTERNEL: usize = 1 << 12;
     }
-
     pub mod exception {
         pub const INST_ADDR_MISALIGN: usize = 1 << 0;
         pub const INST_ACCESSS_FAULT: usize = 1 << 1;

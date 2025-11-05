@@ -1,8 +1,6 @@
 #[derive(Default)]
 #[repr(C)]
 pub struct GeneralPurposeRegisters([usize; 32]);
-
-/// Index of risc-v general purpose registers in `GeneralPurposeRegisters`.
 #[allow(missing_docs)]
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,9 +38,7 @@ pub enum GprIndex {
     T5,
     T6,
 }
-
 impl GprIndex {
-    /// Get register index from raw value.
     pub fn from_raw(raw: u32) -> Option<Self> {
         use GprIndex::*;
         let index = match raw {
@@ -85,29 +81,19 @@ impl GprIndex {
         Some(index)
     }
 }
-
 impl GeneralPurposeRegisters {
-    /// Returns the value of the given register.
     pub fn reg(&self, reg_index: GprIndex) -> usize {
         self.0[reg_index as usize]
     }
-
-    /// Sets the value of the given register.
     pub fn set_reg(&mut self, reg_index: GprIndex, val: usize) {
         if reg_index == GprIndex::Zero {
             return;
         }
-
         self.0[reg_index as usize] = val;
     }
-
-    /// Returns the argument registers.
-    /// This is avoids many calls when an SBI handler needs all of the argmuent regs.
     pub fn a_regs(&self) -> &[usize] {
         &self.0[GprIndex::A0 as usize..=GprIndex::A7 as usize]
     }
-
-    /// Returns the arguments register as a mutable.
     pub fn a_regs_mut(&mut self) -> &mut [usize] {
         &mut self.0[GprIndex::A0 as usize..=GprIndex::A7 as usize]
     }

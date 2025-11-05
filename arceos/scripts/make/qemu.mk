@@ -20,8 +20,8 @@ qemu_args-riscv64 := \
   -kernel $(OUT_BIN)
 
 qemu_args-aarch64 := \
-  -cpu cortex-a72 \
-  -machine virt \
+  -cpu max \
+  -machine virt,virtualization=on \
   -kernel $(OUT_BIN)
 
 qemu_args-y := -m 128M -smp $(SMP) $(qemu_args-$(ARCH))

@@ -1,3 +1,4 @@
+#[cfg(not(feature = "el2"))]
 use core::arch::global_asm;
 
 use aarch64_cpu::registers::{ESR_EL1, FAR_EL1};
@@ -6,8 +7,14 @@ use tock_registers::interfaces::Readable;
 
 use super::TrapFrame;
 
+#[cfg(not(feature = "el2"))]
 global_asm!(include_str!("trap.S"));
 
+#[cfg(feature = "el2")]
+#[path = "trap_el2.rs"]
+mod trap_el2_impl;
+
+#[cfg(not(feature = "el2"))]
 #[repr(u8)]
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -18,6 +25,7 @@ enum TrapKind {
     SError = 3,
 }
 
+#[cfg(not(feature = "el2"))]
 #[repr(u8)]
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -28,6 +36,7 @@ enum TrapSource {
     LowerAArch32 = 3,
 }
 
+#[cfg(not(feature = "el2"))]
 #[no_mangle]
 fn invalid_exception(tf: &TrapFrame, kind: TrapKind, source: TrapSource) {
     panic!(
@@ -36,11 +45,13 @@ fn invalid_exception(tf: &TrapFrame, kind: TrapKind, source: TrapSource) {
     );
 }
 
+#[cfg(not(feature = "el2"))]
 #[no_mangle]
 fn handle_irq_exception(_tf: &TrapFrame) {
     handle_trap!(IRQ, 0);
 }
 
+#[cfg(not(feature = "el2"))]
 fn handle_instruction_abort(tf: &TrapFrame, iss: u64, is_user: bool) {
     let mut access_flags = MappingFlags::EXECUTE;
     if is_user {
@@ -64,6 +75,7 @@ fn handle_instruction_abort(tf: &TrapFrame, iss: u64, is_user: bool) {
     }
 }
 
+#[cfg(not(feature = "el2"))]
 fn handle_data_abort(tf: &TrapFrame, iss: u64, is_user: bool) {
     let wnr = (iss & (1 << 6)) != 0; // WnR: Write not Read
     let cm = (iss & (1 << 8)) != 0; // CM: Cache maintenance
@@ -93,6 +105,7 @@ fn handle_data_abort(tf: &TrapFrame, iss: u64, is_user: bool) {
     }
 }
 
+#[cfg(not(feature = "el2"))]
 #[no_mangle]
 fn handle_sync_exception(tf: &mut TrapFrame) {
     let esr = ESR_EL1.extract();

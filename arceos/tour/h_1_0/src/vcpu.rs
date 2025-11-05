@@ -1,10 +1,7 @@
 use core::arch::global_asm;
 use core::mem::size_of;
-
 use memoffset::offset_of;
 use super::regs::{GeneralPurposeRegisters, GprIndex};
-
-/// Hypervisor GPR and CSR state which must be saved/restored when entering/exiting virtualization.
 #[derive(Default)]
 #[repr(C)]
 struct HypervisorCpuState {
@@ -14,8 +11,6 @@ struct HypervisorCpuState {
     stvec: usize,
     sscratch: usize,
 }
-
-/// Guest GPR and CSR state which must be saved/restored when exiting/entering virtualization.
 #[derive(Default)]
 #[repr(C)]
 pub struct GuestCpuState {
@@ -25,9 +20,6 @@ pub struct GuestCpuState {
     pub scounteren: usize,
     pub sepc: usize,
 }
-
-/// The CSRs that are only in effect when virtualization is enabled (V=1) and must be saved and
-/// restored whenever we switch between VMs.
 #[derive(Default)]
 #[repr(C)]
 pub struct GuestVsCsrs {
@@ -42,9 +34,6 @@ pub struct GuestVsCsrs {
     vsatp: usize,
     vstimecmp: usize,
 }
-
-/// Virtualized HS-level CSRs that are used to emulate (part of) the hypervisor extension for the
-/// guest.
 #[derive(Default)]
 #[repr(C)]
 pub struct GuestVirtualHsCsrs {
@@ -52,9 +41,6 @@ pub struct GuestVirtualHsCsrs {
     hgeie: usize,
     hgatp: usize,
 }
-
-/// CSRs written on an exit from virtualization that are used by the hypervisor to determine the cause
-/// of the trap.
 #[derive(Default, Clone)]
 #[repr(C)]
 pub struct VmCpuTrapState {
@@ -63,56 +49,39 @@ pub struct VmCpuTrapState {
     pub htval: usize,
     pub htinst: usize,
 }
-
-/// (v)CPU register state that must be saved or restored when entering/exiting a VM or switching
-/// between VMs.
 #[derive(Default)]
 #[repr(C)]
 pub struct VmCpuRegisters {
-    // CPU state that's shared between our's and the guest's execution environment. Saved/restored
-    // when entering/exiting a VM.
     hyp_regs: HypervisorCpuState,
     pub guest_regs: GuestCpuState,
-
-    // CPU state that only applies when V=1, e.g. the VS-level CSRs. Saved/restored on activation of
-    // the vCPU.
     vs_csrs: GuestVsCsrs,
-
-    // Virtualized HS-level CPU state.
     virtual_hs_csrs: GuestVirtualHsCsrs,
-
-    // Read on VM exit.
     pub trap_csrs: VmCpuTrapState,
 }
-
 #[allow(dead_code)]
 const fn hyp_gpr_offset(index: GprIndex) -> usize {
     offset_of!(VmCpuRegisters, hyp_regs)
         + offset_of!(HypervisorCpuState, gprs)
         + (index as usize) * size_of::<u64>()
 }
-
 #[allow(dead_code)]
 const fn guest_gpr_offset(index: GprIndex) -> usize {
     offset_of!(VmCpuRegisters, guest_regs)
         + offset_of!(GuestCpuState, gprs)
         + (index as usize) * size_of::<u64>()
 }
-
 #[allow(unused_macros)]
 macro_rules! hyp_csr_offset {
     ($reg:tt) => {
         offset_of!(VmCpuRegisters, hyp_regs) + offset_of!(HypervisorCpuState, $reg)
     };
 }
-
 #[allow(unused_macros)]
 macro_rules! guest_csr_offset {
     ($reg:tt) => {
         offset_of!(VmCpuRegisters, guest_regs) + offset_of!(GuestCpuState, $reg)
     };
 }
-
 global_asm!(
     include_str!("guest.S"),
     hyp_ra = const hyp_gpr_offset(GprIndex::RA),
@@ -173,14 +142,11 @@ global_asm!(
     guest_t5 = const guest_gpr_offset(GprIndex::T5),
     guest_t6 = const guest_gpr_offset(GprIndex::T6),
     guest_sp = const guest_gpr_offset(GprIndex::SP),
-
     guest_sstatus = const guest_csr_offset!(sstatus),
     guest_hstatus = const guest_csr_offset!(hstatus),
     guest_scounteren = const guest_csr_offset!(scounteren),
     guest_sepc = const guest_csr_offset!(sepc),
-
 );
-
 extern "C" {
     pub fn _run_guest(state: *mut VmCpuRegisters);
 }

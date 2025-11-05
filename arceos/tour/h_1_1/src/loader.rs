@@ -7,12 +7,21 @@ use crate::VM_ENTRY;
 pub fn load_vm_image(fname: &str, uspace: &mut AddrSpace) -> io::Result<()> {
     let mut buf = [0u8; 64];
     load_file(fname, &mut buf)?;
-    uspace.map_alloc(
+    ax_println!("[DEBUG] User address space range: {:#x} - {:#x}", uspace.base(), uspace.end());
+    ax_println!("[DEBUG] Attempting to map VM_ENTRY: {:#x}, size: {:#x}", VM_ENTRY, PAGE_SIZE_4K);
+    ax_println!("[DEBUG] contains_range check: {}", uspace.contains_range(VM_ENTRY.into(), PAGE_SIZE_4K));
+    match uspace.map_alloc(
         VM_ENTRY.into(),
         PAGE_SIZE_4K,
         MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE | MappingFlags::USER,
         true
-    ).unwrap();
+    ) {
+        Ok(_) => ax_println!("[DEBUG] map_alloc succeeded"),
+        Err(e) => {
+            ax_println!("[DEBUG] map_alloc failed: {:?}", e);
+            panic!("map_alloc failed for VM_ENTRY {:#x}: {:?}", VM_ENTRY, e);
+        }
+    };
     let (paddr, _, _) = uspace
         .page_table()
         .query(VM_ENTRY.into())

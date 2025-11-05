@@ -1,7 +1,5 @@
 use sbi_spec::rfnc::{REMOTE_FENCE_I, REMOTE_SFENCE_VMA};
-
 use axerrno::AxResult;
-
 #[derive(Clone, Copy, Debug)]
 pub enum RemoteFenceFunction {
     FenceI {
@@ -15,7 +13,6 @@ pub enum RemoteFenceFunction {
         size: u64,
     },
 }
-
 impl RemoteFenceFunction {
     pub fn from_args(args: &[usize]) -> AxResult<Self> {
         match args[6] {
