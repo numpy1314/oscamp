@@ -42,7 +42,8 @@ pub(crate) unsafe fn init_boot_page_table(
         
         // L1[0]: Device memory block (0x0 ~ 0x40000000)
         // 1GB block descriptor: bits [47:30] = output address bits [47:30]
-        let l1_0_desc: u64 = (0 << 30) | (0 << 2) | (0b00 << 6) | (0b00 << 8) | (1 << 10) | (1 << 1) | (1 << 0);
+        //let l1_0_desc: u64 = (0 << 30) | (0 << 2) | (0b00 << 6) | (0b00 << 8) | (1 << 10) | (1 << 1) | (1 << 0);
+        let l1_0_desc: u64 = (0x401);
         unsafe { write_volatile(&mut boot_pt_l1[0] as *mut _ as *mut u64, l1_0_desc); }
         
         let msg4 = b"L1[0] set\r\n";
@@ -55,7 +56,8 @@ pub(crate) unsafe fn init_boot_page_table(
         // 0x40000000 = 0b0100_0000_0000_0000_0000_0000_0000_0000
         // bits [47:30] = 0b00_0000_0000_0000_01 = 1
         // 所以应该是 (1 << 30)
-        let l1_1_desc: u64 = (1u64 << 30) | (1 << 2) | (0b00 << 6) | (0b11 << 8) | (1 << 10) | (1 << 1) | (1 << 0);
+        //let l1_1_desc: u64 = (1u64 << 30) | (1 << 2) | (0b00 << 6) | (0b11 << 8) | (1 << 10) | (1 << 1) | (1 << 0);
+        let l1_1_desc: u64 = (0x705) | (0x4000 << 16);
         unsafe { write_volatile(&mut boot_pt_l1[1] as *mut _ as *mut u64, l1_1_desc); }
         
         let msg5 = b"L1[1] set, PT done!\r\n";
