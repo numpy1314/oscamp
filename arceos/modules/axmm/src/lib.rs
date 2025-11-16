@@ -20,7 +20,7 @@ use memory_addr::{va, PhysAddr, VirtAddr};
 use memory_set::MappingError;
 
 const USER_ASPACE_BASE: usize = 0x0000;
-const USER_ASPACE_SIZE: usize = 0x40_0000_0000;
+const USER_ASPACE_SIZE: usize = 0x8000_0000;  // 2GB, 匹配 EL2 Stage-1 页表映射范围
 
 static KERNEL_ASPACE: LazyInit<SpinNoIrq<AddrSpace>> = LazyInit::new();
 
@@ -47,7 +47,8 @@ fn paging_err_to_ax_err(err: PagingError) -> AxError {
 /// Creates a new address space for user processes.
 pub fn new_user_aspace() -> AxResult<AddrSpace> {
     let mut aspace = AddrSpace::new_empty(VirtAddr::from(USER_ASPACE_BASE), USER_ASPACE_SIZE)?;
-    aspace.copy_mappings_from(&kernel_aspace().lock())?;
+    // EL2 虚拟化场景：不需要复制内核映射，Guest 有自己的页表
+    // aspace.copy_mappings_from(&kernel_aspace().lock())?;
     Ok(aspace)
 }
 

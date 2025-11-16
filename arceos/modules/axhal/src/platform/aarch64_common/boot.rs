@@ -5,6 +5,11 @@ use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
 use axconfig::TASK_STACK_SIZE;
 
+#[cfg(feature = "el2")]
+extern "C" {
+    fn exception_vector_base_el2();
+}
+
 #[link_section = ".bss.stack"]
 static mut BOOT_STACK: [u8; TASK_STACK_SIZE] = [0; TASK_STACK_SIZE];
 
@@ -57,237 +62,148 @@ unsafe fn switch_to_el1() {
     }
 }
 
-// 为虚拟化保持在 EL2
-unsafe fn stay_in_el2() {
-    // 早期调试输出
-    let uart_base = 0x0900_0000 as *mut u8;
-    let msg = b"stay_in_el2 called\r\n";
-    for &byte in msg {
-        core::ptr::write_volatile(uart_base, byte);
-    }
-    
-    SPSel.write(SPSel::SP::ELx);
-    SP_EL0.set(0);
-    let current_el = CurrentEL.read(CurrentEL::EL);
-    if current_el == 3 {
-        // Set EL2 to 64bit and enable the HVC instruction.
-        SCR_EL3.write(
-            SCR_EL3::NS::NonSecure + SCR_EL3::HCE::HvcEnabled + SCR_EL3::RW::NextELIsAarch64,
-        );
-        // Set the return address and exception level to EL2.
-        SPSR_EL3.write(
-            SPSR_EL3::M::EL2h
-                + SPSR_EL3::D::Masked
-                + SPSR_EL3::A::Masked
-                + SPSR_EL3::I::Masked
-                + SPSR_EL3::F::Masked,
-        );
-        ELR_EL3.set(LR.get());
-        asm::eret();
-    }
-    // 如果已经在 EL2,不做任何事
-    // 配置 EL2 的基本设置
-    if current_el >= 2 {
-        // Disable EL1 timer traps
-        CNTHCTL_EL2.modify(CNTHCTL_EL2::EL1PCEN::SET + CNTHCTL_EL2::EL1PCTEN::SET);
-        CNTVOFF_EL2.set(0);
-        // 关键: 显式禁用 Stage-2 转换 (VM=0)
-        // HCR_EL2.RW = 1 (EL1 is AArch64)
-        // HCR_EL2.VM = 0 (禁用 Stage-2 MMU)
-        let hcr_val: u64 = (1 << 31);  // 只设置 RW 位
-        unsafe {
-            core::arch::asm!("msr hcr_el2, {}", in(reg) hcr_val);
-            core::arch::asm!("isb");
-        }
-        
-        // 关键: 在 MMU 开启前设置 VBAR_EL2 为物理地址
-        extern "C" {
-            fn exception_vector_base_el2();
-        }
-        let vbar_virt = exception_vector_base_el2 as usize;
-        // 转换为物理地址: 减去 PHYS_VIRT_OFFSET
-        let vbar_phys = vbar_virt - axconfig::PHYS_VIRT_OFFSET;
-        core::arch::asm!("msr vbar_el2, {}", in(reg) vbar_phys);
-        
-        let msg2 = b"VBAR_EL2 set to phys addr (early)\r\n";
-        for &byte in msg2 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-    }
-}
-
+#[cfg(feature = "el2")]
 unsafe fn init_mmu() {
-    // 立即输出
-    let uart_base = 0x0900_0000 as *mut u8;
-    let msg = b"Entered init_mmu\r\n";
-    for &byte in msg {
-        core::ptr::write_volatile(uart_base, byte);
-    }
+    let uart = 0x0900_0000 as *mut u8;
+    core::ptr::write_volatile(uart, b'A');
     
-    let current_el = CurrentEL.read(CurrentEL::EL);
+    // 先配置 HCR_EL2 - 在 EL2 模式下很重要
+    HCR_EL2.write(HCR_EL2::RW::EL1IsAarch64);
+    barrier::isb(barrier::SY);
     
-    let msg2 = b"Read CurrentEL\r\n";
-    for &byte in msg2 {
-        core::ptr::write_volatile(uart_base, byte);
-    }
+    // Device-nGnRE memory
+    let attr0 = MAIR_EL2::Attr0_Device::nonGathering_nonReordering_EarlyWriteAck;
+    // Normal memory
+    let attr1 = MAIR_EL2::Attr1_Normal_Inner::WriteBack_NonTransient_ReadWriteAlloc
+        + MAIR_EL2::Attr1_Normal_Outer::WriteBack_NonTransient_ReadWriteAlloc;
+    MAIR_EL2.write(attr0 + attr1);
     
-    if current_el == 2 {
-        let msg3 = b"In EL2 branch\r\n";
-        for &byte in msg3 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        // EL2 MMU 初始化
-        MAIR_EL2.set(MemAttr::MAIR_VALUE);
-        
-        let msg4 = b"MAIR_EL2 set\r\n";
-        for &byte in msg4 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        // TCR_EL2: T0SZ=16 (48-bit VA), 与 EL1 一致
-        let tcr_val: u64 = (16 << 0) | (0b01 << 8) | (0b01 << 10) | (0b11 << 12) | (0b00 << 14) | (0b101 << 16);
-        core::arch::asm!("msr tcr_el2, {}", in(reg) tcr_val);
-        
-        let msg5 = b"TCR_EL2 set\r\n";
-        for &byte in msg5 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        barrier::isb(barrier::SY);
-        
-        let msg6 = b"After ISB\r\n";
-        for &byte in msg6 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        // TTBR0_EL2
-        let root_paddr = pa!(BOOT_PT_L0.as_ptr() as usize).as_usize() as u64;
-        
-        let msg7 = b"Got root_paddr\r\n";
-        for &byte in msg7 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        TTBR0_EL2.set(root_paddr);
-        
-        let msg8 = b"TTBR0_EL2 set\r\n";
-        for &byte in msg8 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        // TLB Flush
-        core::arch::asm!("tlbi alle2", "dsb sy", "isb");
-        
-        let msg9 = b"TLB flushed\r\n";
-        for &byte in msg9 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        // 逐条调试 MMU 开启
-        let msg10 = b"Preparing to enable MMU...\r\n";
-        for &byte in msg10 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        let msg12 = b"Enabling MMU in ASM block...\r\n";
-        for &byte in msg12 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-        
-        // 关键: 在一个汇编块中完成所有操作，并确保 MMU 开启后的指令可以被访问
+    core::ptr::write_volatile(uart, b'B');
+
+    // 使用 2 级页表（L0 + L1）映射 0-2GB，1GB block
+    // 48-bit 地址空间，T0SZ = 64 - 48 = 16
+    TCR_EL2.write(
+        TCR_EL2::PS::Bits_40    // 40-bit 物理地址
+        + TCR_EL2::TG0::KiB_4   // 4KB 页粒度
+        + TCR_EL2::SH0::Inner   // Inner Shareable
+        + TCR_EL2::ORGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable  // Outer Write-Back
+        + TCR_EL2::IRGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable  // Inner Write-Back
+        + TCR_EL2::T0SZ.val(16) // 48-bit address space
+    );
+    barrier::isb(barrier::SY);
+    
+    core::ptr::write_volatile(uart, b'C');
+
+    let root_paddr = pa!(BOOT_PT_L0.as_ptr() as usize).as_usize() as u64;
+    TTBR0_EL2.set(root_paddr);
+    barrier::isb(barrier::SY);
+    
+    core::ptr::write_volatile(uart, b'D');
+
+    // Flush TLB
+    unsafe {
         core::arch::asm!(
-            "mrs x0, sctlr_el2",
-            "bic x0, x0, #(1 << 2)",     // 禁用 D-cache
-            "bic x0, x0, #(1 << 12)",    // 禁用 I-cache  
-            "orr x0, x0, #1",            // 开启 MMU
-            "msr sctlr_el2, x0",         // 关键指令
-            "isb",                        // 同步
-            "nop",                        // 确保后续指令可获取
-            "nop",
-            "nop",
-            "nop",
-            out("x0") _,
+            "tlbi alle2",
+            "dsb sy",
+            "isb",
+            options(nostack)
         );
-        
-        let msg13 = b"MMU ENABLED!!!\r\n";
-        for &byte in msg13 {
-            core::ptr::write_volatile(uart_base, byte);
-        }
-    } else {
-        // EL1 MMU 初始化 (原有代码)
-        MAIR_EL1.set(MemAttr::MAIR_VALUE);
-
-        // Enable TTBR0 and TTBR1 walks, page size = 4K, vaddr size = 48 bits, paddr size = 40 bits.
-        let tcr_flags0 = TCR_EL1::EPD0::EnableTTBR0Walks
-            + TCR_EL1::TG0::KiB_4
-            + TCR_EL1::SH0::Inner
-            + TCR_EL1::ORGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-            + TCR_EL1::IRGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-            + TCR_EL1::T0SZ.val(16);
-        let tcr_flags1 = TCR_EL1::EPD1::EnableTTBR1Walks
-            + TCR_EL1::TG1::KiB_4
-            + TCR_EL1::SH1::Inner
-            + TCR_EL1::ORGN1::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-            + TCR_EL1::IRGN1::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-            + TCR_EL1::T1SZ.val(16);
-        TCR_EL1.write(TCR_EL1::IPS::Bits_48 + tcr_flags0 + tcr_flags1);
-        barrier::isb(barrier::SY);
-
-        // Set both TTBR0 and TTBR1
-        let root_paddr = pa!(BOOT_PT_L0.as_ptr() as usize).as_usize() as _;
-        TTBR0_EL1.set(root_paddr);
-        TTBR1_EL1.set(root_paddr);
-
-        // Flush the entire TLB
-        crate::arch::flush_tlb(None);
-
-        // Enable the MMU and turn on I-cache and D-cache
-        SCTLR_EL1.modify(SCTLR_EL1::M::Enable + SCTLR_EL1::C::Cacheable + SCTLR_EL1::I::Cacheable);
-        barrier::isb(barrier::SY);
     }
+    
+    core::ptr::write_volatile(uart, b'E');
+
+    // Enable MMU, I-cache, D-cache
+    SCTLR_EL2.modify(
+        SCTLR_EL2::M::Enable        // Enable MMU
+        + SCTLR_EL2::C::Cacheable   // Enable D-cache
+        + SCTLR_EL2::I::Cacheable   // Enable I-cache
+    );
+    barrier::isb(barrier::SY);
+    
+    core::ptr::write_volatile(uart, b'F');
 }
 
+#[cfg(not(feature = "el2"))]
+unsafe fn init_mmu() {
+    MAIR_EL1.set(MemAttr::MAIR_VALUE);
+
+    // Enable TTBR0 and TTBR1 walks, page size = 4K, vaddr size = 48 bits, paddr size = 40 bits.
+    let tcr_flags0 = TCR_EL1::EPD0::EnableTTBR0Walks
+        + TCR_EL1::TG0::KiB_4
+        + TCR_EL1::SH0::Inner
+        + TCR_EL1::ORGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable
+        + TCR_EL1::IRGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable
+        + TCR_EL1::T0SZ.val(16);
+    let tcr_flags1 = TCR_EL1::EPD1::EnableTTBR1Walks
+        + TCR_EL1::TG1::KiB_4
+        + TCR_EL1::SH1::Inner
+        + TCR_EL1::ORGN1::WriteBack_ReadAlloc_WriteAlloc_Cacheable
+        + TCR_EL1::IRGN1::WriteBack_ReadAlloc_WriteAlloc_Cacheable
+        + TCR_EL1::T1SZ.val(16);
+    TCR_EL1.write(TCR_EL1::IPS::Bits_48 + tcr_flags0 + tcr_flags1);
+    barrier::isb(barrier::SY);
+
+    // Set both TTBR0 and TTBR1
+    let root_paddr = pa!(BOOT_PT_L0.as_ptr() as usize).as_usize() as _;
+    TTBR0_EL1.set(root_paddr);
+    TTBR1_EL1.set(root_paddr);
+
+    // Flush the entire TLB
+    crate::arch::flush_tlb(None);
+
+    // Enable the MMU and turn on I-cache and D-cache
+    SCTLR_EL1.modify(SCTLR_EL1::M::Enable + SCTLR_EL1::C::Cacheable + SCTLR_EL1::I::Cacheable);
+    barrier::isb(barrier::SY);
+}
+
+#[cfg(feature = "el2")]
+unsafe fn enable_fp() {
+    // EL2: SIMD/FP 默认可用，无需特殊配置
+    // 如果需要，可以设置 CPTR_EL2，但当前 aarch64-cpu crate 可能不支持
+    barrier::isb(barrier::SY);
+}
+
+#[cfg(not(feature = "el2"))]
 unsafe fn enable_fp() {
     if cfg!(feature = "fp_simd") {
-        let current_el = CurrentEL.read(CurrentEL::EL);
-        if current_el == 2 {
-            // EL2: 配置 CPTR_EL2 以允许 FP/SIMD
-            // CPTR_EL2.TFP (bit 10) = 0: 不 trap FP/SIMD
-            core::arch::asm!(
-                "mrs x0, cptr_el2",
-                "bic x0, x0, #(1 << 10)",  // Clear TFP bit
-                "msr cptr_el2, x0",
-                out("x0") _,
-            );
-        } else {
-            // EL1: 配置 CPACR_EL1
-            CPACR_EL1.write(CPACR_EL1::FPEN::TrapNothing);
-        }
+        CPACR_EL1.write(CPACR_EL1::FPEN::TrapNothing);
         barrier::isb(barrier::SY);
     }
 }
 
 unsafe fn init_boot_page_table() {
-    crate::platform::mem::init_boot_page_table(addr_of_mut!(BOOT_PT_L0), addr_of_mut!(BOOT_PT_L1));
-    
-    // 调试: 页表初始化后的输出
-    let uart_base = 0x0900_0000 as *mut u8;
-    let msg = b"Back from init_boot_page_table\r\n";
-    for &byte in msg {
-        core::ptr::write_volatile(uart_base, byte);
-    }
+    crate::platform::mem::init_boot_page_table(
+        addr_of_mut!(BOOT_PT_L0),
+        addr_of_mut!(BOOT_PT_L1)
+    );
 }
 
-/// The earliest entry point for the primary CPU.
+/// The earliest entry point for the primary CPU (EL2 mode).
+#[cfg(feature = "el2")]
 #[naked]
 #[no_mangle]
 #[link_section = ".text.boot"]
 unsafe extern "C" fn _start() -> ! {
     // PC = 0x8_0000
     // X0 = dtb
-    #[cfg(feature = "el2")]
     core::arch::asm!("
+        // 最早期调试输出
+        mov     x9, 0x09000000
+        mov     x10, 'S'
+        strb    w10, [x9]
+        mov     x10, 'T'
+        strb    w10, [x9]
+        mov     x10, 'A'
+        strb    w10, [x9]
+        mov     x10, 'R'
+        strb    w10, [x9]
+        mov     x10, 'T'
+        strb    w10, [x9]
+        mov     x10, '\\r'
+        strb    w10, [x9]
+        mov     x10, '\\n'
+        strb    w10, [x9]
+        
         mrs     x19, mpidr_el1
         and     x19, x19, #0xffffff     // get current CPU id
         mov     x20, x0                 // save DTB pointer
@@ -296,10 +212,41 @@ unsafe extern "C" fn _start() -> ! {
         add     x8, x8, {boot_stack_size}
         mov     sp, x8
 
-        bl      {stay_in_el2}           // stay in EL2 for virtualization
-        bl      {enable_fp}             // enable fp/neon  
+        // 设置 EL2 异常向量表（phys_virt_offset=0，物理地址=虚拟地址）
+        adrp    x8, {exception_vector}
+        add     x8, x8, #:lo12:{exception_vector}
+        msr     vbar_el2, x8
+        isb
+
+        bl      {enable_fp}             // enable fp/neon
+        
+        mov     x9, 0x09000000
+        mov     x10, '1'
+        strb    w10, [x9]
+        mov     x10, '\r'
+        strb    w10, [x9]
+        mov     x10, '\n'
+        strb    w10, [x9]
+        
         bl      {init_boot_page_table}
-        bl      {init_mmu}              // setup MMU
+        
+        mov     x9, 0x09000000
+        mov     x10, '2'
+        strb    w10, [x9]
+        mov     x10, '\r'
+        strb    w10, [x9]
+        mov     x10, '\n'
+        strb    w10, [x9]
+        
+        bl      {init_mmu}              // setup MMU for EL2
+        
+        mov     x9, 0x09000000
+        mov     x10, '3'
+        strb    w10, [x9]
+        mov     x10, '\r'
+        strb    w10, [x9]
+        mov     x10, '\n'
+        strb    w10, [x9]
 
         mov     x8, {phys_virt_offset}  // set SP to the high address
         add     sp, sp, x8
@@ -309,7 +256,7 @@ unsafe extern "C" fn _start() -> ! {
         ldr     x8, ={entry}
         blr     x8
         b      .",
-        stay_in_el2 = sym stay_in_el2,
+        exception_vector = sym exception_vector_base_el2,
         init_boot_page_table = sym init_boot_page_table,
         init_mmu = sym init_mmu,
         enable_fp = sym enable_fp,
@@ -318,9 +265,17 @@ unsafe extern "C" fn _start() -> ! {
         phys_virt_offset = const axconfig::PHYS_VIRT_OFFSET,
         entry = sym crate::platform::rust_entry,
         options(noreturn),
-    );
-    
-    #[cfg(not(feature = "el2"))]
+    )
+}
+
+/// The earliest entry point for the primary CPU (EL1 mode).
+#[cfg(not(feature = "el2"))]
+#[naked]
+#[no_mangle]
+#[link_section = ".text.boot"]
+unsafe extern "C" fn _start() -> ! {
+    // PC = 0x8_0000
+    // X0 = dtb
     core::arch::asm!("
         mrs     x19, mpidr_el1
         and     x19, x19, #0xffffff     // get current CPU id

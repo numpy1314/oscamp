@@ -21,7 +21,7 @@ pub struct GuestCpuState {
 #[derive(Default)]
 #[repr(C)]
 pub struct VmCpuRegisters {
-    hyp_regs: HypervisorCpuState,
+    pub hyp_regs: HypervisorCpuState,
     pub guest_regs: GuestCpuState,
 }
 #[allow(dead_code)]
@@ -50,11 +50,28 @@ const fn guest_sp_offset() -> usize {
         + offset_of!(GuestCpuState, gprs)
         + offset_of!(GeneralPurposeRegisters, sp)
 }
-global_asm!(include_str!("guest.S"));
-const _: () = {
-    const HYP_SIZE: usize = size_of::<HypervisorCpuState>();
-    const GUEST_OFFSET: usize = offset_of!(VmCpuRegisters, guest_regs);
-};
+#[allow(unused_macros)]
+macro_rules! hyp_csr_offset {
+    ($reg:tt) => {
+        offset_of!(VmCpuRegisters, hyp_regs) + offset_of!(HypervisorCpuState, $reg)
+    };
+}
+#[allow(unused_macros)]
+macro_rules! guest_csr_offset {
+    ($reg:tt) => {
+        offset_of!(VmCpuRegisters, guest_regs) + offset_of!(GuestCpuState, $reg)
+    };
+}
+global_asm!(
+    include_str!("guest.S"),
+    // 只定义实际使用的偏移量
+    hyp_x30 = const hyp_gpr_offset(30),
+    hyp_sp = const hyp_sp_offset(),
+    guest_x0 = const guest_gpr_offset(0),
+    guest_sp = const guest_sp_offset(),
+    guest_elr_el2 = const guest_csr_offset!(elr_el2),
+    guest_spsr_el2 = const guest_csr_offset!(spsr_el2),
+);
 extern "C" {
     pub fn _run_guest(regs: *mut VmCpuRegisters);
 }

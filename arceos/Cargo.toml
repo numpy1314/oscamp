@@ -29,6 +29,7 @@ members = [
     "payload/origin",
     "payload/skernel",
     "payload/skernel2",
+    "payload/skernel_aarch64",
 
     "tour/u_1_0",
     "tour/u_2_0",

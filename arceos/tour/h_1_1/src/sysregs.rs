@@ -12,6 +12,7 @@ pub trait AArch64SysRegTrait {
 pub struct SysRegs {
     pub hcr_el2: HcrEl2,
     pub vttbr_el2: VttbrEl2,
+    pub vtcr_el2: VtcrEl2,
     pub elr_el2: ElrEl2,
     pub spsr_el2: SpsrEl2,
     pub esr_el2: EsrEl2,
@@ -20,6 +21,7 @@ pub struct SysRegs {
 pub static SYSREG: SysRegs = SysRegs {
     hcr_el2: HcrEl2,
     vttbr_el2: VttbrEl2,
+    vtcr_el2: VtcrEl2,
     elr_el2: ElrEl2,
     spsr_el2: SpsrEl2,
     esr_el2: EsrEl2,
@@ -119,6 +121,25 @@ impl AArch64SysRegTrait for FarEl2 {
     fn write(&self, val: usize) {
         unsafe {
             core::arch::asm!("msr far_el2, {}", in(reg) val);
+        }
+    }
+}
+pub struct VtcrEl2;
+impl AArch64SysRegTrait for VtcrEl2 {
+    fn read(&self) -> usize {
+        let val: usize;
+        unsafe {
+            core::arch::asm!("mrs {}, vtcr_el2", out(reg) val);
+        }
+        val
+    }
+    fn write(&self, val: usize) {
+        unsafe {
+            core::arch::asm!(
+                "msr vtcr_el2, {}",
+                "isb",
+                in(reg) val
+            );
         }
     }
 }

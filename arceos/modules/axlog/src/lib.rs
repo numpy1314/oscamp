@@ -48,8 +48,6 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-extern crate log;
-
 use core::fmt::{self, Write};
 use core::str::FromStr;
 
