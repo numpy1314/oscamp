@@ -18,11 +18,14 @@ use loader::load_vm_image;
 use axhal::mem::PhysAddr;
 use sysregs::{SYSREG, AArch64SysRegTrait, exception_class};
 const VM_ENTRY: usize = 0x4020_0000;  // 1GB + 2MB，在用户地址空间内 (0-2GB)
+// Stage-2 调试打印（占位，避免编译错误；后续可替换为真实实现）
+fn dump_stage2_tables(_ept_root: PhysAddr) {}
+
 #[cfg_attr(feature = "axstd", no_mangle)]
 fn main() {
     ax_println!("[h_1_1] ===== Hypervisor Starting =====");
     
-    // Step 0: 设置 EL2 异常向量表指向 _guest_exit
+    // 设置 EL2 异常向量表指向 _guest_exit
     extern "C" {
         fn _guest_exit();
     }
@@ -52,27 +55,33 @@ fn main() {
     }
     ax_println!("[h_1_1] ✓ Guest loaded successfully");
     
-    ax_println!("[h_1_1] Step 3: Initializing guest context...");
+    ax_println!("[h_1_1] Step 3: Setting up Stage-2 page table...");
+    let ept_root = uspace.page_table_root();
+    ax_println!("[h_1_1] EPT root paddr: {:#x}", usize::from(ept_root));
+    // 配置 VTCR_EL2 和 VTTBR_EL2，与 axvisor 保持一致
+    let mut vtcr_el2: usize = 0;
+    vtcr_el2 |= 0b001 << 16;   // PS: 40-bit PA
+    vtcr_el2 |= 0b00 << 14;    // TG0: 4KB
+    vtcr_el2 |= 0b11 << 12;    // SH0: Inner
+    vtcr_el2 |= 0b11 << 10;    // ORGN0: WB RA WA
+    vtcr_el2 |= 0b11 << 8;     // IRGN0: WB RA WA
+    vtcr_el2 |= 0b10 << 6;     // SL0: Level0 start
+    vtcr_el2 |= 16;            // T0SZ: 48-bit IPA
+    SYSREG.vtcr_el2.write_value(vtcr_el2);
+    let vttbr = usize::from(ept_root);
+    SYSREG.vttbr_el2.write_value(vttbr);
+    ax_println!("[h_1_1] VTCR_EL2 configured: {:#x}", vtcr_el2);
+    ax_println!("[h_1_1] VTTBR_EL2 configured: {:#x}", vttbr);
+    
+    // 打印 L0/L1/L2 调试信息（保持原样）
+    dump_stage2_tables(ept_root);
+    
+    ax_println!("[h_1_1] Stage-2 page table configured");
+    
+    ax_println!("[h_1_1] Step 4: Initializing guest context...");
     let mut ctx = VmCpuRegisters::default();
     prepare_guest_context(&mut ctx);
     ax_println!("[h_1_1] Guest context initialized");
-    
-    ax_println!("[h_1_1] Step 4: Setting up Stage-2 page table...");
-    let ept_root = uspace.page_table_root();
-    ax_println!("[h_1_1] EPT root paddr: {:#x}", usize::from(ept_root));
-    
-    // 验证 VM_ENTRY 的映射
-    match uspace.page_table().query(VM_ENTRY.into()) {        Ok((paddr, flags, page_size)) => {
-            ax_println!("[h_1_1] VM_ENTRY {:#x} maps to paddr={:#x}, flags={:?}, page_size={:?}", 
-                VM_ENTRY, paddr, flags, page_size);
-        },
-        Err(e) => {
-            panic!("VM_ENTRY {:#x} not mapped: {:?}", VM_ENTRY, e);
-        }
-    }
-    
-    prepare_vm_pgtable(ept_root);
-    ax_println!("[h_1_1] Stage-2 page table configured");
     
     ax_println!("[h_1_1] Step 5: Starting guest VM...");
     ax_println!("[h_1_1] Guest entry point: {:#x}", VM_ENTRY);
@@ -82,7 +91,6 @@ fn main() {
 }
 fn prepare_vm_pgtable(ept_root: PhysAddr) {
     // 配置 VTCR_EL2 - Virtualization Translation Control Register
-    // 这是 Stage-2 页表转换的关键控制寄存器
     let mut vtcr_el2: usize = 0;
     
     // PS[18:16] = 0b001 (40-bit PA, 1TB)
@@ -114,7 +122,7 @@ fn prepare_vm_pgtable(ept_root: PhysAddr) {
     SYSREG.vttbr_el2.write_value(vttbr);
     ax_println!("[h_1_1] VTTBR_EL2 configured: {:#x}", vttbr);
     
-    // 验证 Stage-2 页表内容（调试用）
+fn dump_stage2_tables(ept_root: PhysAddr) {
     unsafe {
         use axhal::mem::phys_to_virt;
         let root_va = phys_to_virt(ept_root);
@@ -129,54 +137,36 @@ fn prepare_vm_pgtable(ept_root: PhysAddr) {
                     i, l0_table[i], 
                     if is_table { "table, " } else { "block, " },
                     next_level_addr);
-                
-                // 如果是表项，查看下一级页表
                 if is_table {
                     let l1_va = phys_to_virt(PhysAddr::from(next_level_addr as usize));
                     let l1_table = core::slice::from_raw_parts(l1_va.as_ptr() as *const u64, 512);
                     ax_println!("    L1 table at PA:{:#x}:", next_level_addr);
-                    
-                    // 找到 VM_ENTRY (IPA:0x40200000) 对应的 L1 索引
-                    // 39-bit 地址空间，L1 索引 = bits[38:30] = 0x40200000 >> 30 = 0x100 >> 30 = 4
                     let vm_entry_l1_idx = (VM_ENTRY >> 30) & 0x1FF;
                     ax_println!("    VM_ENTRY {:#x} -> L1[{}]", VM_ENTRY, vm_entry_l1_idx);
-                    
                     for j in 0..16 {
                         if l1_table[j] != 0 {
                             let is_l1_table = (l1_table[j] & 0x3) == 0x3;
                             let is_l1_block = (l1_table[j] & 0x3) == 0x1;
-                            ax_println!("    L1[{}] = {:#018x} ({})", 
-                                j, l1_table[j],
-                                if is_l1_table { "table" } else if is_l1_block { "block" } else { "page" });
+                            ax_println!("    L1[{}] = {:#018x} ({})", j, l1_table[j], if is_l1_table { "table" } else if is_l1_block { "block" } else { "page" });
                         }
                     }
-                    
-                    // 特别检查 VM_ENTRY 对应的项
                     if l1_table[vm_entry_l1_idx] != 0 {
                         ax_println!("    *** VM_ENTRY L1[{}] = {:#018x}", vm_entry_l1_idx, l1_table[vm_entry_l1_idx]);
-                        
-                        // 检查 L2 表
                         let is_l1_table = (l1_table[vm_entry_l1_idx] & 0x3) == 0x3;
                         if is_l1_table {
                             let l2_pa = l1_table[vm_entry_l1_idx] & 0xFFFF_FFFF_F000;
                             let l2_va = phys_to_virt(PhysAddr::from(l2_pa as usize));
                             let l2_table = core::slice::from_raw_parts(l2_va.as_ptr() as *const u64, 512);
                             ax_println!("    L2 table at PA:{:#x}:", l2_pa);
-                            
-                            // VM_ENTRY {:#x} -> L2 索引 = bits[29:21]
                             let vm_entry_l2_idx = (VM_ENTRY >> 21) & 0x1FF;
                             ax_println!("    VM_ENTRY {:#x} -> L2[{}]", VM_ENTRY, vm_entry_l2_idx);
-                            
                             for k in 0..16 {
                                 if l2_table[k] != 0 {
                                     let is_l2_table = (l2_table[k] & 0x3) == 0x3;
                                     let is_l2_block = (l2_table[k] & 0x3) == 0x1;
-                                    ax_println!("    L2[{}] = {:#018x} ({})", 
-                                        k, l2_table[k],
-                                        if is_l2_table { "table" } else if is_l2_block { "block" } else { "page" });
+                                    ax_println!("    L2[{}] = {:#018x} ({})", k, l2_table[k], if is_l2_table { "table" } else if is_l2_block { "block" } else { "page" });
                                 }
                             }
-                            
                             if l2_table[vm_entry_l2_idx] != 0 {
                                 ax_println!("    *** VM_ENTRY L2[{}] = {:#018x}", vm_entry_l2_idx, l2_table[vm_entry_l2_idx]);
                             } else {
@@ -190,6 +180,7 @@ fn prepare_vm_pgtable(ept_root: PhysAddr) {
             }
         }
     }
+}
     
     // 刷新 TLB，确保 Stage-2 页表生效
     unsafe {
@@ -300,7 +291,13 @@ fn prepare_guest_context(ctx: &mut VmCpuRegisters) {
     ctx.guest_regs.spsr_el2 = spsr_el2;
     ax_println!("[h_1_1] SPSR_EL2 configured: {:#x} (EL1h with all interrupts masked)", spsr_el2);
     
-    // 配置 ELR_EL2 - Exception Link Register (guest entry point)
+    // 保存 VTCR_EL2 / VTTBR_EL2 到上下文，供 guest.S 恢复
+    let vtcr_el2_val = SYSREG.vtcr_el2.read();
+    ctx.guest_regs.vtcr_el2 = vtcr_el2_val;
+    let vttbr_el2_val = SYSREG.vttbr_el2.read();
+    ctx.guest_regs.vttbr_el2 = vttbr_el2_val;
+    ax_println!("[h_1_1] VTCR_EL2 saved to context: {:#x}", vtcr_el2_val);
+    ax_println!("[h_1_1] VTTBR_EL2 saved to context: {:#x}", vttbr_el2_val);    // 配置 ELR_EL2 - Exception Link Register (guest entry point)
     ctx.guest_regs.elr_el2 = VM_ENTRY;
     ax_println!("[h_1_1] ELR_EL2 configured: {:#x}", VM_ENTRY);
     

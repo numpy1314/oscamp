@@ -17,6 +17,8 @@ pub struct GuestCpuState {
     pub elr_el2: usize,
     pub spsr_el2: usize,
     pub hcr_el2: usize,
+    pub vtcr_el2: usize,
+    pub vttbr_el2: usize,
 }
 #[derive(Default)]
 #[repr(C)]
@@ -68,9 +70,15 @@ global_asm!(
     hyp_x30 = const hyp_gpr_offset(30),
     hyp_sp = const hyp_sp_offset(),
     guest_x0 = const guest_gpr_offset(0),
+    guest_x1 = const guest_gpr_offset(1),
+    guest_x2 = const guest_gpr_offset(2),
+    guest_x3 = const guest_gpr_offset(3),
     guest_sp = const guest_sp_offset(),
     guest_elr_el2 = const guest_csr_offset!(elr_el2),
     guest_spsr_el2 = const guest_csr_offset!(spsr_el2),
+    guest_hcr_el2 = const guest_csr_offset!(hcr_el2),
+    guest_vtcr_el2 = const guest_csr_offset!(vtcr_el2),
+    guest_vttbr_el2 = const guest_csr_offset!(vttbr_el2),
 );
 extern "C" {
     pub fn _run_guest(regs: *mut VmCpuRegisters);
