@@ -1,16 +1,18 @@
-TARGET := aarch64-unknown-none
-MODE := release
-OUT_DIR := ../../target/$(TARGET)/$(MODE)
-OUT_BIN := $(OUT_DIR)/skernel_aarch64
+TARGET := skernel_aarch64
+TARGET_ELF := ../../target/aarch64-unknown-none/release/$(TARGET)
 
-.PHONY: all clean build
+all: $(TARGET) FORCE
 
-all: build
+$(TARGET): $(TARGET_ELF)
+	@rust-objcopy --binary-architecture=aarch64 --strip-all -O binary $< $@
 
-build:
-	@cargo build --target $(TARGET) --release
-	@rust-objcopy --binary-architecture=aarch64 $(OUT_BIN) --strip-all -O binary $(OUT_BIN).bin
-	@echo "Built: $(OUT_BIN).bin"
+$(TARGET_ELF):
+	@cargo build -p $(TARGET) --target aarch64-unknown-none --release
 
 clean:
-	@cargo clean
+	@rm -rf ./$(TARGET)
+	@cargo clean -p $(TARGET) --target aarch64-unknown-none --release
+FORCE:
+
+.PHONY: FORCE
+

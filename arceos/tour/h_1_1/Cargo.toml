@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = ["el2"]
-el2 = ["axhal/el2"]
+el2 = ["axhal/el2", "axmm/el2"]
 
 [dependencies]
 axstd = { workspace = true, features = ["alloc", "paging", "multitask", "sched_cfs", "fs"], optional = true }

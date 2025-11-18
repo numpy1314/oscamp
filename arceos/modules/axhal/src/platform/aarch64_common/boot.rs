@@ -64,10 +64,6 @@ unsafe fn switch_to_el1() {
 
 #[cfg(feature = "el2")]
 unsafe fn init_mmu() {
-    let uart = 0x0900_0000 as *mut u8;
-    core::ptr::write_volatile(uart, b'A');
-    
-    // 先配置 HCR_EL2 - 在 EL2 模式下很重要
     HCR_EL2.write(HCR_EL2::RW::EL1IsAarch64);
     barrier::isb(barrier::SY);
     
@@ -77,8 +73,6 @@ unsafe fn init_mmu() {
     let attr1 = MAIR_EL2::Attr1_Normal_Inner::WriteBack_NonTransient_ReadWriteAlloc
         + MAIR_EL2::Attr1_Normal_Outer::WriteBack_NonTransient_ReadWriteAlloc;
     MAIR_EL2.write(attr0 + attr1);
-    
-    core::ptr::write_volatile(uart, b'B');
 
     // 使用 2 级页表（L0 + L1）映射 0-2GB，1GB block
     // 48-bit 地址空间，T0SZ = 64 - 48 = 16
@@ -91,14 +85,10 @@ unsafe fn init_mmu() {
         + TCR_EL2::T0SZ.val(16) // 48-bit address space
     );
     barrier::isb(barrier::SY);
-    
-    core::ptr::write_volatile(uart, b'C');
 
     let root_paddr = pa!(BOOT_PT_L0.as_ptr() as usize).as_usize() as u64;
     TTBR0_EL2.set(root_paddr);
     barrier::isb(barrier::SY);
-    
-    core::ptr::write_volatile(uart, b'D');
 
     // Flush TLB
     unsafe {
@@ -109,8 +99,6 @@ unsafe fn init_mmu() {
             options(nostack)
         );
     }
-    
-    core::ptr::write_volatile(uart, b'E');
 
     // Enable MMU, I-cache, D-cache
     SCTLR_EL2.modify(
@@ -120,7 +108,6 @@ unsafe fn init_mmu() {
     );
     barrier::isb(barrier::SY);
     
-    core::ptr::write_volatile(uart, b'F');
 }
 
 #[cfg(not(feature = "el2"))]
@@ -187,23 +174,6 @@ unsafe extern "C" fn _start() -> ! {
     // PC = 0x8_0000
     // X0 = dtb
     core::arch::asm!("
-        // 最早期调试输出
-        mov     x9, 0x09000000
-        mov     x10, 'S'
-        strb    w10, [x9]
-        mov     x10, 'T'
-        strb    w10, [x9]
-        mov     x10, 'A'
-        strb    w10, [x9]
-        mov     x10, 'R'
-        strb    w10, [x9]
-        mov     x10, 'T'
-        strb    w10, [x9]
-        mov     x10, '\\r'
-        strb    w10, [x9]
-        mov     x10, '\\n'
-        strb    w10, [x9]
-        
         mrs     x19, mpidr_el1
         and     x19, x19, #0xffffff     // get current CPU id
         mov     x20, x0                 // save DTB pointer
@@ -218,35 +188,9 @@ unsafe extern "C" fn _start() -> ! {
         msr     vbar_el2, x8
         isb
 
-        bl      {enable_fp}             // enable fp/neon
-        
-        mov     x9, 0x09000000
-        mov     x10, '1'
-        strb    w10, [x9]
-        mov     x10, '\r'
-        strb    w10, [x9]
-        mov     x10, '\n'
-        strb    w10, [x9]
-        
+        bl      {enable_fp}             // enable fp/neon  
         bl      {init_boot_page_table}
-        
-        mov     x9, 0x09000000
-        mov     x10, '2'
-        strb    w10, [x9]
-        mov     x10, '\r'
-        strb    w10, [x9]
-        mov     x10, '\n'
-        strb    w10, [x9]
-        
         bl      {init_mmu}              // setup MMU for EL2
-        
-        mov     x9, 0x09000000
-        mov     x10, '3'
-        strb    w10, [x9]
-        mov     x10, '\r'
-        strb    w10, [x9]
-        mov     x10, '\n'
-        strb    w10, [x9]
 
         mov     x8, {phys_virt_offset}  // set SP to the high address
         add     sp, sp, x8
@@ -267,9 +211,9 @@ unsafe extern "C" fn _start() -> ! {
         options(noreturn),
     )
 }
-
+    
 /// The earliest entry point for the primary CPU (EL1 mode).
-#[cfg(not(feature = "el2"))]
+    #[cfg(not(feature = "el2"))]
 #[naked]
 #[no_mangle]
 #[link_section = ".text.boot"]

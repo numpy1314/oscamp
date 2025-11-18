@@ -1,4 +1,4 @@
-SUB_DIRS=origin hello_c fileops_c mapfile_c skernel skernel2
+SUB_DIRS=origin hello_c fileops_c mapfile_c skernel skernel2 skernel_aarch64
 
 all: $(SUB_DIRS)
 

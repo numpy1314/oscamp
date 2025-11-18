@@ -50,10 +50,6 @@ _run_guest:
     isb
 
     // 恢复虚拟化关键系统寄存器（参考 axvisor 顺序）
-    ldr     x9, [x0, {guest_vtcr_el2}]
-    msr     vtcr_el2, x9
-    ldr     x9, [x0, {guest_vttbr_el2}]
-    msr     vttbr_el2, x9
     ldr     x9, [x0, {guest_hcr_el2}]
     msr     hcr_el2, x9
 
@@ -202,11 +198,7 @@ _guest_exit:
     mrs     x9, spsr_el2
     str     x9, [x0, {guest_spsr_el2}]
 
-    // 保存 guest vtcr_el2, vttbr_el2, hcr_el2
-    mrs     x9, vtcr_el2
-    str     x9, [x0, {guest_vtcr_el2}]
-    mrs     x9, vttbr_el2
-    str     x9, [x0, {guest_vttbr_el2}]
+    // 保存 guest hcr_el2
     mrs     x9, hcr_el2
     str     x9, [x0, {guest_hcr_el2}]
     

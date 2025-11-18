@@ -134,8 +134,6 @@ global_asm!(
     guest_elr_el2 = const guest_csr_offset!(elr_el2),
     guest_spsr_el2 = const guest_csr_offset!(spsr_el2),
     guest_hcr_el2 = const guest_csr_offset!(hcr_el2),
-    guest_vtcr_el2 = const guest_csr_offset!(vtcr_el2),
-    guest_vttbr_el2 = const guest_csr_offset!(vttbr_el2),
 );
 extern "C" {
     pub fn _run_guest(regs: *mut VmCpuRegisters);
