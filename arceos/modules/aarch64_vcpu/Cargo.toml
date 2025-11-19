@@ -1,0 +1,13 @@
+[package]
+name = "aarch64_vcpu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axhal = { workspace = true, features = ["el2"] }
+axerrno = "0.1"
+aarch64-cpu = "9.4.0"
+tock-registers = "0.8.1"
+memoffset = { version = ">=0.6.5", features = ["unstable_const"] }
+axlog = { workspace = true }
+memory_addr = "0.3"

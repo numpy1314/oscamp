@@ -211,9 +211,9 @@ unsafe extern "C" fn _start() -> ! {
         options(noreturn),
     )
 }
-    
+
 /// The earliest entry point for the primary CPU (EL1 mode).
-    #[cfg(not(feature = "el2"))]
+#[cfg(not(feature = "el2"))]
 #[naked]
 #[no_mangle]
 #[link_section = ".text.boot"]
