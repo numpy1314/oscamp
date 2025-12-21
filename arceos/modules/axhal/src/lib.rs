@@ -57,6 +57,8 @@ pub mod irq;
 
 #[cfg(feature = "paging")]
 pub mod paging;
+#[cfg(feature = "paging")]
+pub mod paging_hv;
 
 /// Console input and output.
 pub mod console {

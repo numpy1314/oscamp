@@ -25,12 +25,12 @@ use axhal::paging::MappingFlags;
 
 #[no_mangle]
 fn main() {
-    ax_println!("[h_2_1] Starting virtualization...");
+    ax_println!("[h_3_1] Starting virtualization...");
 
     // Setup AddressSpace and regions.
     let mut aspace = AddrSpace::new_empty(VirtAddr::from(VM_ASPACE_BASE), VM_ASPACE_SIZE).unwrap();
 
-    ax_println!("[h_2_1] Setting up memory regions...");
+    ax_println!("[h_3_1] Setting up memory regions...");
     //aspace.map_linear(0x9000000.into(), 0x9000000.into(), 0x1000, MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE).unwrap();
     for r in axhal::mem::memory_regions() {
         let flags: MappingFlags = r.flags.into();
@@ -44,15 +44,15 @@ fn main() {
     aspace.map_alloc(PHY_MEM_START.into(), PHY_MEM_SIZE, mapping_flags, true).unwrap();
 
     // Load corresponding images for VM.
-    ax_println!("[h_2_1] VM created success, loading images...");
-    let image_fname = "/sbin/u_3_0_aarch64-qemu-virt-hv.bin";
+    ax_println!("[h_3_1] VM created success, loading images...");
+    let image_fname = "/sbin/u_6_0_aarch64-qemu-virt-hv.bin";
     load_vm_image(image_fname.to_string(), KERNEL_BASE.into(), &aspace).expect("Failed to load VM images");
 
     // Create VCpus.
     let mut arch_vcpu = AARCH64Vcpu::init();
 
     // Setup VCpus.
-    ax_println!("[h_2_1] bsp_entry: {:#x}; ept: {:#x}", KERNEL_BASE, aspace.page_table_root());
+    ax_println!("[h_3_1] bsp_entry: {:#x}; ept: {:#x}", KERNEL_BASE, aspace.page_table_root());
     arch_vcpu.set_entry(KERNEL_BASE.into()).unwrap();
     arch_vcpu.set_ept_root(aspace.page_table_root()).unwrap();
 
@@ -61,7 +61,7 @@ fn main() {
             Ok(exit_reason) => match exit_reason {
                 AxVCpuExitReason::Nothing => {},
                 AxVCpuExitReason::PageFault{addr, access_flags} => {
-                    ax_println!("[h_2_1] addr {:#x} access {:#x}", addr, access_flags);
+                    ax_println!("[h_3_1] addr {:#x} access {:#x}", addr, access_flags);
 
                     //assert_eq!(addr, 0x2200_0000.into(), "Now we ONLY handle pflash#2.");
                     let mapping_flags = MappingFlags::from_bits(0xf).unwrap();

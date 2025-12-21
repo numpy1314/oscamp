@@ -9,7 +9,15 @@ extern crate alloc;
 mod aspace;
 mod backend;
 
+#[cfg(feature = "el2")]
+mod aspace_hv;
+#[cfg(feature = "el2")]
+mod backend_hv;
+
 pub use self::aspace::AddrSpace;
+
+#[cfg(feature = "el2")]
+pub use self::aspace_hv::AddrSpace as AddrSpaceHV;
 
 use axerrno::{AxError, AxResult};
 use axhal::mem::phys_to_virt;

@@ -18,6 +18,7 @@ members = [
     "modules/axtask",
     "modules/bump_allocator",
     "modules/riscv_vcpu",
+    "modules/aarch64_vcpu",
 
     "api/axfeat",
     "api/arceos_api",
@@ -50,6 +51,7 @@ members = [
     "tour/h_2_0",
     "tour/h_2_1",
     "tour/h_3_0",
+    "tour/h_3_1",
     "tour/h_4_0",
 
     "exercises/print_with_color",
@@ -97,6 +99,8 @@ axfs_ramfs = { path = "./axfs_ramfs" }
 
 [patch.crates-io]
 kernel_guard = { path = "../crates/kernel_guard"} 
+page_table_entry = { path = "../crates/page_table_entry"}
+page_table_multiarch = { path = "../crates/page_table_multiarch"}
 
 [profile.release]
 lto = true
