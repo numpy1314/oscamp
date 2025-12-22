@@ -44,6 +44,7 @@ members = [
     "tour/u_8_0",
     "tour/m_1_0",
     "tour/m_1_1",
+    "tour/m_1_2",
     "tour/m_2_0",
     "tour/m_3_0",
     "tour/m_3_1",
@@ -54,6 +55,7 @@ members = [
     "tour/h_3_0",
     "tour/h_3_1",
     "tour/h_4_0",
+    "tour/h_4_1",
 
     "exercises/print_with_color",
     "exercises/support_hashmap",

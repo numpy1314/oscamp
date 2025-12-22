@@ -8,6 +8,8 @@ use memory_addr::{PhysAddr, VirtAddr};
 use tock_registers::interfaces::{Readable, Writeable};
 
 pub use self::context::{FpState, TaskContext, TrapFrame};
+#[cfg(feature = "uspace")]
+pub use self::context::UspaceContext;
 
 /// Allows the current CPU to respond to interrupts.
 #[inline]

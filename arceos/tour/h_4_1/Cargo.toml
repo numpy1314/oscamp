@@ -1,0 +1,18 @@
+[package]
+name = "h_4_1"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["el2"]
+el2 = ["axhal/el2", "axmm/el2"]
+
+[dependencies]
+axlog = { workspace = true }
+axstd = { workspace = true, features = ["alloc", "paging", "fs", "irq"] }
+axhal = { workspace = true }
+axmm = { workspace = true }
+aarch64_vcpu = { path = "../../modules/aarch64_vcpu" }
+axerrno = "0.1"
+memory_addr = "0.3"
+axsync = { workspace = true }
