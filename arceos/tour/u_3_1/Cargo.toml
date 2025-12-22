@@ -1,0 +1,11 @@
+[package]
+name = "u_3_1"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axstd = { workspace = true, features = ["alloc", "paging"], optional = true }
+
+[features]
+default = ["axstd"]
+axstd = ["dep:axstd"]

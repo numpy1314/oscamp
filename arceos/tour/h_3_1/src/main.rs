@@ -63,10 +63,10 @@ fn main() {
                 AxVCpuExitReason::PageFault{addr, access_flags} => {
                     ax_println!("[h_3_1] addr {:#x} access {:#x}", addr, access_flags);
 
-                    //assert_eq!(addr, 0x2200_0000.into(), "Now we ONLY handle pflash#2.");
-                    let mapping_flags = MappingFlags::from_bits(0xf).unwrap();
+                    let mapping_flags = MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE;
                     // Passthrough-Mode
-                    let _ = aspace.map_linear(addr.align_down_4k(), addr.align_down_4k().as_usize().into(), 4096, mapping_flags);
+                    let _ = aspace.map_linear(addr.align_down_4k(), addr.align_down_4k().as_usize().into(), 4096, mapping_flags).expect("map_linear failed");
+                    ax_println!("[h_3_1] mapped addr {:#x} size {:#x} with flags {:#x}", addr.align_down_4k(), 4096, mapping_flags.bits());
 
                     /*
                     // Emulator-Mode

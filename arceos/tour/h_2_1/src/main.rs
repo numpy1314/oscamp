@@ -45,7 +45,7 @@ fn main() {
 
     // Load corresponding images for VM.
     ax_println!("[h_2_1] VM created success, loading images...");
-    let image_fname = "/sbin/u_3_0_aarch64-qemu-virt-hv.bin";
+    let image_fname = "/sbin/u_3_1_aarch64-qemu-virt-hv.bin";
     load_vm_image(image_fname.to_string(), KERNEL_BASE.into(), &aspace).expect("Failed to load VM images");
 
     // Create VCpus.
@@ -63,10 +63,10 @@ fn main() {
                 AxVCpuExitReason::PageFault{addr, access_flags} => {
                     ax_println!("[h_2_1] addr {:#x} access {:#x}", addr, access_flags);
 
-                    //assert_eq!(addr, 0x2200_0000.into(), "Now we ONLY handle pflash#2.");
-                    let mapping_flags = MappingFlags::from_bits(0xf).unwrap();
+                    let mapping_flags = MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE;
                     // Passthrough-Mode
-                    let _ = aspace.map_linear(addr.align_down_4k(), addr.align_down_4k().as_usize().into(), 4096, mapping_flags);
+                    let _ = aspace.map_linear(addr.align_down_4k(), addr.align_down_4k().as_usize().into(), 4096, mapping_flags).expect("map_linear failed");
+                    ax_println!("[h_2_1] mapped addr {:#x} size {:#x} with flags {:#x}", addr.align_down_4k(), 4096, mapping_flags.bits());
 
                     /*
                     // Emulator-Mode
