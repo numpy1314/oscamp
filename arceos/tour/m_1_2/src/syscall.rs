@@ -5,6 +5,7 @@ use axhal::trap::{register_trap_handler, SYSCALL, PAGE_FAULT};
 use axhal::mem::VirtAddr;
 use axhal::paging::MappingFlags;
 use axerrno::LinuxError;
+use axtask::TaskExtRef;
 
 const SYS_EXIT: usize = 93;
 
@@ -27,16 +28,19 @@ fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
 
 #[register_trap_handler(PAGE_FAULT)]
 fn handle_page_fault(vaddr: VirtAddr, access_flags: MappingFlags, is_user: bool) -> bool {
-    ax_println!(
-        "[m_1_2] PAGE_FAULT at {:#x}, access={:#x}, is_user={} -> power off via PSCI",
-        vaddr,
-        access_flags.bits(),
-        is_user,
-    );
-
-    #[cfg(target_arch = "aarch64")]
-    crate::psci_system_off();
-
-    #[allow(unreachable_code)]
-    false
+    if is_user {
+        if !axtask::current()
+            .task_ext()
+            .aspace
+            .lock()
+            .handle_page_fault(vaddr, access_flags)
+        {
+            ax_println!("[m_1_2] {}: segmentation fault, exit!", axtask::current().id_name());
+            axtask::exit(-1);
+        }
+        true
+    } else {
+        ax_println!("[m_1_2] Kernel PAGE_FAULT at {:#x}, flags={:?}", vaddr, access_flags);
+        false
+    }
 }

@@ -251,10 +251,6 @@ impl UspaceContext {
     pub fn new(entry: usize, ustack_top: VirtAddr) -> Self {
         // SPSR_EL1:
         // - bit 0-3: M[3:0] = 0b0000 (EL0t - EL0 with SP_EL0)
-        // - bit 6: F = 0 (FIQ not masked)
-        // - bit 7: I = 0 (IRQ not masked)
-        // - bit 8: A = 0 (SError not masked)
-        // - bit 9: D = 0 (Debug exceptions not masked)
         const SPSR_EL1_EL0: u64 = 0b0000;
         Self(TrapFrame {
             r: [0; 31],
@@ -298,8 +294,6 @@ impl UspaceContext {
     ///
     /// It restores the user registers and jumps to the user entry point
     /// (saved in `elr`).
-    /// When an exception or syscall occurs, the kernel stack pointer is
-    /// switched to `kstack_top`.
     ///
     /// # Safety
     ///
@@ -307,44 +301,75 @@ impl UspaceContext {
     #[inline(never)]
     #[no_mangle]
     pub unsafe fn enter_uspace(&self, kstack_top: VirtAddr) -> ! {
-        use aarch64_cpu::registers::{SPSR_EL1, ELR_EL1, SP_EL0};
+        use aarch64_cpu::registers::{ELR_EL1, SPSR_EL1, SP_EL0};
         use tock_registers::interfaces::Writeable;
 
+        // Keep the debug logs you added (helpful)
+        let tf_ptr = (&self.0 as *const TrapFrame) as usize;
+        axlog::warn!(
+            "[enter_uspace] tf_ptr={:#x} kstack_top={:#x}",
+            tf_ptr,
+            kstack_top.as_usize()
+        );
+        axlog::warn!(
+            "[enter_uspace] r0={:#x} r1={:#x} r2={:#x} r3={:#x}",
+            self.0.r[0], self.0.r[1], self.0.r[2], self.0.r[3]
+        );
+        axlog::warn!(
+            "[enter_uspace] usp={:#x} elr={:#x} spsr={:#x}",
+            self.0.usp, self.0.elr, self.0.spsr
+        );
+
         super::disable_irqs();
-        
+
         // Set up exception return context
         SPSR_EL1.set(self.0.spsr);
         ELR_EL1.set(self.0.elr);
         SP_EL0.set(self.0.usp);
 
+        // IMPORTANT:
+        // - Do NOT let the TrapFrame base pointer live in x0..x30 that we will restore.
+        // - Use a temporary register (x31 is not usable), so choose x18 (AAPCS says it's a
+        //   platform register; in bare-metal it's fine as scratch here).
+        //
+        // Also IMPORTANT:
+        // - Do NOT overwrite SP_EL0 with kstack_top. SP_EL0 is the USER stack.
+        // - Kernel stack for exceptions should be handled by SP_EL1 (already set elsewhere)
+        //   or by your exception vector logic, not by clobbering SP_EL0 here.
+
         asm!(
-            // Save kernel stack pointer for exception handling
-            "mov    x9, {kstack_top}",
-            "msr    sp_el0, x9",
-            
-            // Restore general-purpose registers
-            "ldp    x0, x1, [{tf}, #0]",
-            "ldp    x2, x3, [{tf}, #16]",
-            "ldp    x4, x5, [{tf}, #32]",
-            "ldp    x6, x7, [{tf}, #48]",
-            "ldp    x8, x9, [{tf}, #64]",
-            "ldp    x10, x11, [{tf}, #80]",
-            "ldp    x12, x13, [{tf}, #96]",
-            "ldp    x14, x15, [{tf}, #112]",
-            "ldp    x16, x17, [{tf}, #128]",
-            "ldp    x18, x19, [{tf}, #144]",
-            "ldp    x20, x21, [{tf}, #160]",
-            "ldp    x22, x23, [{tf}, #176]",
-            "ldp    x24, x25, [{tf}, #192]",
-            "ldp    x26, x27, [{tf}, #208]",
-            "ldp    x28, x29, [{tf}, #224]",
-            "ldr    x30, [{tf}, #240]",
-            
+            // x18 = &TrapFrame (stable base)
+            "mov    x18, {tf}",
+
+            // Restore general-purpose registers from TrapFrame.r[0..30]
+            // Offsets:
+            //   TrapFrame.r starts at 0, 31 * 8 bytes = 248 bytes
+            //   r30 at offset 30*8 = 240
+            "ldp    x0,  x1,  [x18, #0]",
+            "ldp    x2,  x3,  [x18, #16]",
+            "ldp    x4,  x5,  [x18, #32]",
+            "ldp    x6,  x7,  [x18, #48]",
+            "ldp    x8,  x9,  [x18, #64]",
+            "ldp    x10, x11, [x18, #80]",
+            "ldp    x12, x13, [x18, #96]",
+            "ldp    x14, x15, [x18, #112]",
+            "ldp    x16, x17, [x18, #128]",
+            // skip x18 here (it's our base pointer)
+            "ldr    x19, [x18, #152]",
+            "ldp    x20, x21, [x18, #160]",
+            "ldp    x22, x23, [x18, #176]",
+            "ldp    x24, x25, [x18, #192]",
+            "ldp    x26, x27, [x18, #208]",
+            "ldp    x28, x29, [x18, #224]",
+            "ldr    x30, [x18, #240]",
+
+            // Restore x18 from TrapFrame.r[18] at offset 18*8=144
+            "ldr    x18, [x18, #144]",
+
             // Exception return to EL0
             "eret",
-            
-            tf = in(reg) &(self.0),
-            kstack_top = in(reg) kstack_top.as_usize(),
+
+            tf = in(reg) (&self.0 as *const TrapFrame),
             options(noreturn),
         )
     }

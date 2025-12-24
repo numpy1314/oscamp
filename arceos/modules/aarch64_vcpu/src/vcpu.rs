@@ -1,17 +1,18 @@
 use core::arch::global_asm;
 use core::mem::size_of;
 use memoffset::offset_of;
+
 use super::regs::GeneralPurposeRegisters;
 use super::sysregs::exception_class;
 use super::psci::{self, PsciMessage};
 
 use axerrno::AxResult;
-use memory_addr::{VirtAddr, PhysAddr};
 use axhal::paging::MappingFlags;
+use memory_addr::{PhysAddr, VirtAddr};
 
-/// Guest physical address.
+/// Guest physical address (IPA)
 pub type GuestPhysAddr = VirtAddr;
-/// Host physical address.
+/// Host physical address (PA)
 pub type HostPhysAddr = PhysAddr;
 
 #[derive(Default)]
@@ -22,6 +23,7 @@ struct HypervisorCpuState {
     spsr_el2: usize,
     sp_el2: usize,
 }
+
 #[derive(Default)]
 #[repr(C)]
 pub struct GuestCpuState {
@@ -32,12 +34,15 @@ pub struct GuestCpuState {
     pub vtcr_el2: usize,
     pub vttbr_el2: usize,
 }
+
 #[derive(Default)]
 #[repr(C)]
 pub struct VmCpuRegisters {
     pub hyp_regs: HypervisorCpuState,
     pub guest_regs: GuestCpuState,
 }
+
+// ---------- offsets used by guest.S (MUST be before global_asm!) ----------
 #[allow(dead_code)]
 const fn hyp_gpr_offset(index: usize) -> usize {
     offset_of!(VmCpuRegisters, hyp_regs)
@@ -45,12 +50,14 @@ const fn hyp_gpr_offset(index: usize) -> usize {
         + offset_of!(GeneralPurposeRegisters, x)
         + index * size_of::<usize>()
 }
+
 #[allow(dead_code)]
 const fn hyp_sp_offset() -> usize {
     offset_of!(VmCpuRegisters, hyp_regs)
         + offset_of!(HypervisorCpuState, gprs)
         + offset_of!(GeneralPurposeRegisters, sp)
 }
+
 #[allow(dead_code)]
 const fn guest_gpr_offset(index: usize) -> usize {
     offset_of!(VmCpuRegisters, guest_regs)
@@ -58,24 +65,29 @@ const fn guest_gpr_offset(index: usize) -> usize {
         + offset_of!(GeneralPurposeRegisters, x)
         + index * size_of::<usize>()
 }
+
 #[allow(dead_code)]
 const fn guest_sp_offset() -> usize {
     offset_of!(VmCpuRegisters, guest_regs)
         + offset_of!(GuestCpuState, gprs)
         + offset_of!(GeneralPurposeRegisters, sp)
 }
+
 #[allow(unused_macros)]
 macro_rules! hyp_csr_offset {
     ($reg:tt) => {
         offset_of!(VmCpuRegisters, hyp_regs) + offset_of!(HypervisorCpuState, $reg)
     };
 }
+
 #[allow(unused_macros)]
 macro_rules! guest_csr_offset {
     ($reg:tt) => {
         offset_of!(VmCpuRegisters, guest_regs) + offset_of!(GuestCpuState, $reg)
     };
 }
+
+// ---------- include guest.S exactly once ----------
 global_asm!(
     include_str!("guest.S"),
     hyp_x1 = const hyp_gpr_offset(1),
@@ -111,6 +123,7 @@ global_asm!(
     hyp_sp = const hyp_sp_offset(),
     hyp_elr_el2 = const hyp_csr_offset!(elr_el2),
     hyp_spsr_el2 = const hyp_csr_offset!(spsr_el2),
+
     guest_x0 = const guest_gpr_offset(0),
     guest_x1 = const guest_gpr_offset(1),
     guest_x2 = const guest_gpr_offset(2),
@@ -147,6 +160,7 @@ global_asm!(
     guest_spsr_el2 = const guest_csr_offset!(spsr_el2),
     guest_hcr_el2 = const guest_csr_offset!(hcr_el2),
 );
+
 extern "C" {
     pub fn _run_guest(regs: *mut VmCpuRegisters);
 }
@@ -157,56 +171,22 @@ pub struct AARCH64Vcpu {
 }
 
 impl AARCH64Vcpu {
-    pub fn set_entry(&mut self, entry: GuestPhysAddr) -> AxResult {
-        let regs = &mut self.regs;
-        regs.guest_regs.elr_el2 = entry.as_usize();
-        Ok(())
-    }
-
-    pub fn set_ept_root(&mut self, ept_root: HostPhysAddr) -> AxResult {
-        self.regs.guest_regs.vttbr_el2 = usize::from(ept_root);
-        let vtcr_el2 = 16 << 0 |  // TOSZ
-                     (0b10 << 6) |   // SLo = Granule4KBLevel0
-                     (0b11 << 8) |   // IRGN0 = NormalWBRAnWA
-                     (0b11 << 10) |  // ORGN0 = NormalWBRAnWA
-                     (0b11 << 12) |  // SH0 = Inner
-                     (0b00 << 14) |  // TG0 = Granule4KB
-                     (0b001 << 16);  // PS = 40 bits
-        self.regs.guest_regs.vtcr_el2 = vtcr_el2;
-        unsafe {
-            core::arch::asm!(
-                "msr vttbr_el2, {}",
-                "msr vtcr_el2, {}",
-                "tlbi vmalle1",
-                "tlbi alle2",
-                "dsb sy",
-                "isb",
-                in(reg) self.regs.guest_regs.vttbr_el2,
-                in(reg) self.regs.guest_regs.vtcr_el2,
-            );
-        }
-        Ok(())
-    }
-
-    pub fn run(&mut self) -> AxResult<AxVCpuExitReason> {
-        let regs = &mut self.regs;
-        unsafe {
-            _run_guest(regs);
-        }
-        self.vmexit_handler()
-    }
-}
-
-impl AARCH64Vcpu {
     pub fn init() -> Self {
         let mut regs = VmCpuRegisters::default();
 
+        // HCR_EL2:
+        // RW=1 (EL1 is AArch64)
+        // VM=1 (stage-2 enable)
+        // TSC=1 (trap SMC)
+        // TGE=0 (do NOT route guest exceptions to EL2)
         let mut hcr_el2: usize = 0;
         hcr_el2 |= 1 << 31; // RW
         hcr_el2 |= 1 << 0;  // VM
-        hcr_el2 |= 1 << 19; // Trap SMC instructions to EL2
+        hcr_el2 |= 1 << 19; // TSC
+        hcr_el2 &= !(1 << 27); // TGE=0
         regs.guest_regs.hcr_el2 = hcr_el2;
 
+        // Guest PSTATE: EL1h + mask interrupts
         let mut spsr_el2: usize = 0;
         spsr_el2 |= 0b0101; // EL1h
         spsr_el2 |= 1 << 6; // F
@@ -218,79 +198,182 @@ impl AARCH64Vcpu {
         Self { regs }
     }
 
-    pub fn advance_pc(&mut self, instr_len: usize) {
-        self.regs.guest_regs.elr_el2 += instr_len;
+    pub fn set_entry(&mut self, entry: GuestPhysAddr) -> AxResult {
+        self.regs.guest_regs.elr_el2 = entry.as_usize();
+        Ok(())
     }
 
-    pub fn regs(&mut self) -> &mut VmCpuRegisters {
-        &mut self.regs
-    }
-}
+    pub fn set_ept_root(&mut self, ept_root: HostPhysAddr) -> AxResult {
+        self.regs.guest_regs.vttbr_el2 = usize::from(ept_root);
 
-impl AARCH64Vcpu {
+        let vtcr_el2 =
+              (16 << 0)
+            | (0b10 << 6)
+            | (0b11 << 8)
+            | (0b11 << 10)
+            | (0b11 << 12)
+            | (0b00 << 14)
+            | (0b001 << 16);
+
+        self.regs.guest_regs.vtcr_el2 = vtcr_el2;
+
+        unsafe {
+            core::arch::asm!(
+                "msr vttbr_el2, {}",
+                "msr vtcr_el2, {}",
+                "dsb ishst",
+                "tlbi vmalls12e1is",
+                "dsb ish",
+                "isb",
+                in(reg) self.regs.guest_regs.vttbr_el2,
+                in(reg) self.regs.guest_regs.vtcr_el2,
+            );
+        }
+        Ok(())
+    }
+
+    pub fn run(&mut self) -> AxResult<AxVCpuExitReason> {
+        unsafe { _run_guest(&mut self.regs) };
+        self.vmexit_handler()
+    }
+
     fn vmexit_handler(&mut self) -> AxResult<AxVCpuExitReason> {
         let esr_el2: usize;
-        unsafe {
-            core::arch::asm!("mrs {}, esr_el2", out(reg) esr_el2);
-        }
-        let ec = (esr_el2 >> 26) & 0x3F;
+        unsafe { core::arch::asm!("mrs {}, esr_el2", out(reg) esr_el2) };
+        let ec = (esr_el2 >> 26) & 0x3f;
+
         warn!(
-            "VmExit: EC={:#x}, ESR_EL2={:#x}, ELR_EL2={:#x}",
+            "VmExit: EC={:#x}, ESR_EL2={:#x}, ELR_EL2(mem)={:#x}",
             ec, esr_el2, self.regs.guest_regs.elr_el2
         );
+
+                // ---- extra debug for all exits ----
+        let elr_el2_hw: usize;
+        unsafe { core::arch::asm!("mrs {}, elr_el2", out(reg) elr_el2_hw) };
+
+        // Try to read the instruction at guest PC (may fault if unmapped; in your case it's mapped)
+        /* let insn = unsafe { core::ptr::read_volatile(elr_el2_hw as *const u32) };
+        warn!(
+            "[DBG] ELR_EL2(HW)={:#x}, insn=0x{:08x}, x0={:#x}, x1={:#x}, x2={:#x}, x3={:#x}, x8={:#x}",
+            elr_el2_hw,
+            insn,
+            self.regs.guest_regs.gprs.x[0],
+            self.regs.guest_regs.gprs.x[1],
+            self.regs.guest_regs.gprs.x[2],
+            self.regs.guest_regs.gprs.x[3],
+            self.regs.guest_regs.gprs.x[8],
+        ); */
+
+        let elr_el2_hw: usize;
+        unsafe { core::arch::asm!("mrs {}, elr_el2", out(reg) elr_el2_hw) };
+
+        warn!(
+            "[DBG] ELR_EL2(HW)={:#x}, x0={:#x}, x1={:#x}, x2={:#x}, x3={:#x}, x8={:#x}",
+            elr_el2_hw,
+            self.regs.guest_regs.gprs.x[0],
+            self.regs.guest_regs.gprs.x[1],
+            self.regs.guest_regs.gprs.x[2],
+            self.regs.guest_regs.gprs.x[3],
+            self.regs.guest_regs.gprs.x[8],
+        );
+
         match ec as u32 {
-            exception_class::EC_HVC64 | exception_class::EC_SMC64 => {
-                let psci_msg = PsciMessage::from_regs(self.regs.guest_regs.gprs.a_regs()).ok();
-                warn!("VmExit Reason: HVC/SMC: {:?}", psci_msg);
-                if let Some(msg) = psci_msg {
-                    match msg {
-                        PsciMessage::System(psci::SystemFunction::SystemOff) => {
-                            warn!("Guest requested system shutdown via PSCI");
-                            warn!("===== Hypervisor Exiting Normally =====");
-                            // 调用系统关机
-                            axhal::misc::terminate();
-                        },
-                        PsciMessage::System(psci::SystemFunction::SystemReset { .. }) => {
-                            warn!("Guest requested system reset via PSCI");
-                            warn!("===== Hypervisor Exiting (Reset) =====");
-                            axhal::misc::terminate();
-                        },
-                        _ => {
-                            warn!("Unhandled PSCI call: {:?}", msg);
-                        }
-                    }
-                } else {
-                    panic!("bad PSCI message!");
-                }
+            // SVC64 (EL0/EL1 SVC trap to EL2) - normally we DON'T want this in route A
+            0x15 => {
+                warn!(
+                    "[DBG] SVC trapped to EL2 (unexpected for route A). x8(syscall)={:#x}, x0(arg0)={:#x}",
+                    self.regs.guest_regs.gprs.x[8],
+                    self.regs.guest_regs.gprs.x[0],
+                );
                 Ok(AxVCpuExitReason::Nothing)
-            },
+            }
+
+            // HVC64 / SMC64 (PSCI, etc.)
+            0x16 | 0x17 => {
+                match PsciMessage::from_regs(self.regs.guest_regs.gprs.a_regs()) {
+                    Ok(msg) => {
+                        warn!("[DBG] PSCI msg (HVC/SMC): {:?}", msg);
+                        self.regs.guest_regs.elr_el2 = elr_el2_hw + 4;
+                        if let PsciMessage::System(psci::SystemFunction::SystemOff) = msg {
+                            axhal::misc::terminate();
+                        }
+                        Ok(AxVCpuExitReason::Nothing)
+                    }
+                    Err(e) => {
+                        warn!(
+                            "[DBG] HVC/SMC trapped but PsciMessage::from_regs failed: {:?}. x0={:#x} x1={:#x} x2={:#x} x3={:#x}",
+                            e,
+                            self.regs.guest_regs.gprs.x[0],
+                            self.regs.guest_regs.gprs.x[1],
+                            self.regs.guest_regs.gprs.x[2],
+                            self.regs.guest_regs.gprs.x[3],
+                        );
+                        Ok(AxVCpuExitReason::Nothing)
+                    }
+                }
+            }
+
+            // -----------------------------
+            // Data Abort from lower EL
+            // -----------------------------
             exception_class::EC_DABT_LOWER => {
-                let iss = esr_el2 & 0x1FFFFFF;
-                let wnr = (iss & (1 << 6)) != 0; // WnR: Write not Read
-                let cm = (iss & (1 << 8)) != 0; // CM: Cache maintenance
-                let access_flags = if wnr & !cm {
-                    MappingFlags::WRITE | MappingFlags::USER
+                let iss = esr_el2 & 0x1ffffff;
+                let wnr = (iss & (1 << 6)) != 0;
+                let dfsc = iss & 0x3f;
+
+                let mut access_flags = if wnr {
+                    MappingFlags::WRITE
                 } else {
-                    MappingFlags::READ | MappingFlags::USER
+                    MappingFlags::READ
                 };
+                access_flags |= MappingFlags::USER;
 
                 let far_el2: usize;
+                let hpfar_el2: usize;
+                let hcr_el2_hw: usize;
+                let elr_el2_hw: usize;
                 unsafe {
-                    core::arch::asm!("mrs {}, far_el2", out(reg) far_el2);
+                    core::arch::asm!(
+                        "mrs {0}, far_el2",
+                        "mrs {1}, hpfar_el2",
+                        "mrs {2}, hcr_el2",
+                        "mrs {3}, elr_el2",
+                        out(reg) far_el2,
+                        out(reg) hpfar_el2,
+                        out(reg) hcr_el2_hw,
+                        out(reg) elr_el2_hw,
+                    );
                 }
-                let vaddr = GuestPhysAddr::from(far_el2);
+
+                warn!(
+                    "DABT@EL2: ELR_EL2(HW)={:#x}, FAR_EL2={:#x}, HPFAR_EL2={:#x}, HCR_EL2(HW)={:#x}, ISS={:#x} (WnR={}, DFSC={:#x})",
+                    elr_el2_hw, far_el2, hpfar_el2, hcr_el2_hw, iss, wnr, dfsc
+                );
+
+                warn!(
+                    "[DBG] guest GPR: x0={:#x}, x1={:#x}, x2={:#x}, x3={:#x}, sp={:#x}",
+                    self.regs.guest_regs.gprs.x[0],
+                    self.regs.guest_regs.gprs.x[1],
+                    self.regs.guest_regs.gprs.x[2],
+                    self.regs.guest_regs.gprs.x[3],
+                    self.regs.guest_regs.gprs.sp,
+                );
+
+                if hpfar_el2 == 0 {
+                    warn!("[DBG] HPFAR_EL2=0 => stage-1 fault (guest), NOT stage-2. Not mapping.");
+                    return Ok(AxVCpuExitReason::Nothing);
+                }
+
+                let ipa =
+                    (((hpfar_el2 & 0xffff_ffff_ffff_ff00) << 8) as usize) | (far_el2 & 0xfff);
 
                 Ok(AxVCpuExitReason::PageFault {
-                    addr: vaddr,
+                    addr: GuestPhysAddr::from(ipa),
                     access_flags,
                 })
             }
-            _ => {
-                panic!(
-                    "Unhandled trap: EC={:#x}, ESR_EL2={:#x}, ELR_EL2={:#x}",
-                    ec, esr_el2, self.regs.guest_regs.elr_el2
-                );
-            }
+
+            _ => panic!("Unhandled EC={:#x}", ec),
         }
     }
 }
